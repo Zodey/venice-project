@@ -1,0 +1,660 @@
+#define IMGUI_DEFINE_MATH_OPERATORS
+
+#include "phobia_menu.h"
+#include "phobia_globals.h"
+#include "phobia_widgets.h"
+#include "bytearray.h"
+#include "UI.h"
+
+#include "../ImGui/imgui.h"
+#include "../ImGui/imgui_internal.h"
+
+#include <Windows.h>
+#include <stdlib.h>
+#include <d3d9.h>
+#include <d3dx9tex.h>
+#include "../SDK/Config.h"
+
+#pragma comment(lib, "d3dx9.lib")
+#pragma warning (disable : 4244)
+
+#define S(x) (x)
+#define SX(x) (x)
+#define SY(x) (x)
+
+bool particles = true;
+bool background = false;
+float accent_colour[4] = { 1.f, 1.f, 1.f, 1.f };
+
+int old_tab = 0;
+int phobia_tab = 0;
+
+char username[64] = {};
+char password[64] = {};
+
+float content_animation = 0.f;
+constexpr float base_w = 864.f;
+constexpr float base_h = 604.f;
+float sx = 1.f;
+float sy = 1.f;
+float dpi_scale = 1.f;
+float menu_w = base_w;
+float menu_h = base_h;
+bool menu_sized = false;
+
+
+
+
+bool update_on_f5 = true;
+bool remember_me = false;
+
+int game = 0;
+const char* games_list[4] = { "Counter-Strike: GO", "Dying Light", "Apex Legends", "Warface" };
+
+ImFont* phobia_font = nullptr;
+ImFont* phobia_big_font = nullptr;
+ImFont* phobia_icon_font = nullptr;
+ImFont* phobia_title_font = nullptr;
+
+static IDirect3DTexture9* bgs = nullptr;
+static IDirect3DTexture9* logo = nullptr;
+static IDirect3DTexture9* logotwo = nullptr;
+static IDirect3DTexture9* foto_user = nullptr;
+
+static int m_tabs = 0;
+static float open_alpha = 0.f;
+static int side_sel[8] = { 0 };
+static const char* side_filter[8][6][3] =
+{
+    { { "" }, { "" }, { "" }, { "" }, { "" }, { "" } },
+    { { "Angles" }, { "Fake lag" }, { "Other" } },
+    { { "ESP" }, { "Chams" }, { "Preview" } },
+    { { "Other ESP" }, { "Effects", "Elements" } },
+    { { "Miscellaneous" }, { "Movement" } },
+    { { "Skins", "Models" } },
+    { { "Config" } },
+    { { "Scripts" } },
+};
+
+static const char* tab_names[8] = { "Aimbot", "Anti aim", "Player", "Visuals", "Misc", "Skins", "Config", "Scripts" };
+static const char* tab_icons[8] = { "A", "O", "B", "C", "U", "J", "H", "Q" };
+
+namespace render_ui
+{
+float widget_height(IBaseWidget* w)
+{
+switch (w->GetType())
+{
+case WidgetType::Label: return SY(20);
+case WidgetType::Checkbox: return SY(22);
+case WidgetType::KeyBind: return SY(22);
+case WidgetType::Button: return SY(26);
+case WidgetType::SliderInt:
+case WidgetType::SliderFloat: return SY(44);
+case WidgetType::Combo:
+case WidgetType::MultiCombo: return SY(44);
+case WidgetType::ColorPicker:
+case WidgetType::Input: return SY(26);
+default: return SY(24);
+}
+}
+
+void widget(IBaseWidget* w)
+{
+	float gw = ImGui::GetContentRegionAvail().x / 24.f;
+	bool indented = (w->parent_item != nullptr);
+if (indented)
+	if (indented)
+		ImGui::Indent(0.f);
+
+bool offset = (w->GetType() == WidgetType::Combo || w->GetType() == WidgetType::MultiCombo || w->GetType() == WidgetType::ColorPicker || w->GetType() == WidgetType::Input || w->GetType() == WidgetType::Button);
+if (offset)
+ImGui::Indent(0.f);
+
+bool is_label = (w->GetType() == WidgetType::Label);
+	if (is_label)
+		ImGui::Indent(0.f);
+
+
+ImGui::PushID(w);
+
+	switch (w->GetType())
+	{
+	case WidgetType::Checkbox:
+	{
+		auto c = reinterpret_cast<CCheckBox*>(w);
+		if (phobia::checkbox(w->name.c_str(), &c->value))
+			for (auto& cb : w->callbacks) cb();
+		break;
+	}
+	case WidgetType::SliderInt:
+	{
+		auto s = reinterpret_cast<CSliderInt*>(w);
+            {
+                ImVec2 sp = ImGui::GetCursorScreenPos();
+                const float cw = ImGui::GetContentRegionAvail().x;
+                phobia::add_colored_text(ImGui::GetWindowDrawList(), sp, ImColor(150, 150, 155), ImColor(150, 150, 155), w->name.c_str());
+                ImGui::SetCursorScreenPos(ImVec2(sp.x, sp.y + 16.f));
+                ImGui::SetNextItemWidth(cw);
+            }
+		if (phobia::slider_int(w->name.c_str(), &s->value, s->min, s->max, s->format.c_str()))
+			for (auto& cb : w->callbacks) cb();
+		break;
+	}
+	case WidgetType::SliderFloat:
+	{
+		auto s = reinterpret_cast<CSliderFloat*>(w);
+            {
+                ImVec2 sp = ImGui::GetCursorScreenPos();
+                const float cw = ImGui::GetContentRegionAvail().x;
+                phobia::add_colored_text(ImGui::GetWindowDrawList(), sp, ImColor(150, 150, 155), ImColor(150, 150, 155), w->name.c_str());
+                ImGui::SetCursorScreenPos(ImVec2(sp.x, sp.y + 16.f));
+                ImGui::SetNextItemWidth(cw);
+            }
+		if (phobia::slider_float(w->name.c_str(), &s->value, s->min, s->max, s->format.c_str()))
+			for (auto& cb : w->callbacks) cb();
+		break;
+	}
+    case WidgetType::Combo:
+	{
+		auto cb2 = reinterpret_cast<CComboBox*>(w);
+		if (cb2->elements.empty())
+			break;
+            {
+                ImVec2 sp = ImGui::GetCursorScreenPos();
+                const float cw = ImGui::GetContentRegionAvail().x;
+                phobia::add_colored_text(ImGui::GetWindowDrawList(), sp, ImColor(150, 150, 155), ImColor(150, 150, 155), w->name.c_str());
+                ImGui::SetCursorScreenPos(ImVec2(sp.x, sp.y + 16.f));
+                ImGui::SetNextItemWidth(cw);
+            }
+            if (ImGui::Combo("##cb", &cb2->value, cb2->elements.data(), (int)cb2->elements.size(), 10, -1))
+			for (auto& cb : w->callbacks) cb();
+		break;
+	}
+	case WidgetType::MultiCombo:
+	{
+		auto mc = reinterpret_cast<CMultiCombo*>(w);
+		if (mc->elements.empty())
+			break;
+            {
+                ImVec2 sp = ImGui::GetCursorScreenPos();
+                const float cw = ImGui::GetContentRegionAvail().x;
+                phobia::add_colored_text(ImGui::GetWindowDrawList(), sp, ImColor(150, 150, 155), ImColor(150, 150, 155), w->name.c_str());
+                ImGui::SetCursorScreenPos(ImVec2(sp.x, sp.y + 16.f));
+                ImGui::SetNextItemWidth(cw);
+            }
+            if (ImGui::MultiCombo("##mc", mc->value, mc->elements.data(), mc->elements.size(), -1))
+			for (auto& cb : w->callbacks) cb();
+		break;
+	}
+    case WidgetType::ColorPicker:
+	{
+		auto cp = reinterpret_cast<CColorPicker*>(w);
+		ImVec2 start = ImGui::GetCursorScreenPos();
+		ImVec2 ts = ImGui::CalcTextSize(w->name.c_str());
+		ImGui::GetWindowDrawList()->AddText(start, ImColor(200, 200, 200, int(255 * ImGui::GetStyle().Alpha)), w->name.c_str());
+		const float cright = ImGui::GetWindowPos().x + ImGui::GetWindowSize().x - 10.f - 20.f;
+		ImGui::SetCursorScreenPos(ImVec2(cright, start.y));
+		ImGui::SetNextItemWidth(20.f);
+		if (ImGui::ColorEdit4("##c", cp->value, ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar | (cp->has_alpha ? 0 : ImGuiColorEditFlags_NoAlpha)))
+			for (auto& cb : w->callbacks) cb();
+		break;
+	}
+	case WidgetType::Input:
+	{
+		auto ib = reinterpret_cast<CInputBox*>(w);
+            {
+                ImVec2 sp = ImGui::GetCursorScreenPos();
+                const float cw = ImGui::GetContentRegionAvail().x;
+                phobia::add_colored_text(ImGui::GetWindowDrawList(), sp, ImColor(150, 150, 155), ImColor(150, 150, 155), w->name.c_str());
+                ImGui::SetCursorScreenPos(ImVec2(sp.x, sp.y + 16.f));
+                ImGui::SetNextItemWidth(cw);
+            }
+		if (ImGui::TextField(w->name.c_str(), nullptr, ib->buf, 64, ib->flags))
+			for (auto& cb : w->callbacks) cb();
+		break;
+	}
+	case WidgetType::Button:
+	{
+		if (ImGui::Button(w->name.c_str(), ImVec2(-1, 22.f)))
+			for (auto& cb : w->callbacks) cb();
+		break;
+	}
+	case WidgetType::Label:
+	{
+		ImGui::Text(w->name.c_str());
+		break;
+	}
+	case WidgetType::KeyBind:
+		break;
+	default:
+		w->Render();
+		break;
+	}
+
+if (w->additional && w->additional->GetType() == WidgetType::KeyBind && w->additional->visible)
+{
+auto kb = reinterpret_cast<CKeyBind*>(w->additional);
+
+ImVec2 rmin = ImGui::GetItemRectMin();
+	float kx = ImGui::GetWindowPos().x + ImGui::GetWindowSize().x - 10.f - 46.f;
+
+ImGui::SetCursorScreenPos(ImVec2(kx, rmin.y + S(1)));
+phobia::keybind("##kb", &kb->key);
+}
+
+if (is_label)
+ImGui::Unindent(0.f);
+
+if (offset)
+ImGui::Unindent(0.f);
+
+ImGui::PopID();
+
+if (indented)
+ImGui::Unindent(S(14));
+}
+
+void tab_content(CMenuTab* t)
+{
+	if (!t)
+		return;
+
+	static std::map<void*, float> measured;
+    auto show = [&](CMenuGroupbox* gb) -> bool
+    {
+            const char* const* f = side_filter[m_tabs][side_sel[m_tabs]];
+            if (!f[0][0])
+                    return true;
+            for (int i = 0; i < 3 && f[i] && f[i][0]; i++)
+                    if (gb->name == f[i])
+                            return true;
+            return false;
+    };
+
+	int total = 0;
+	for (auto gb : t->groupboxes)
+	{
+            if (!show(gb))
+                    continue;
+            if (!show(gb))
+                    continue;
+		int vc = 0;
+		for (auto w : gb->widgets)
+			if (w->visible)
+				vc++;
+		if (vc)
+			total++;
+	}
+	if (!total)
+		return;
+
+	const int ncols = ImMin(3, total);
+	const float gap = 20.f;
+	const float top = 74.f;
+	const float wrap_y = menu_h - 64.f;
+	const float card_w = ImMin(218.f, (ImMax(menu_w - 172.f, 300.f) - (ncols - 1) * gap) / ncols);
+
+	int n[3] = { 0, 0, 0 };
+	int idx = 0;
+	for (auto gb : t->groupboxes)
+	{
+            if (!show(gb))
+                    continue;
+            if (!show(gb))
+                    continue;
+		int vc = 0;
+		for (auto w : gb->widgets)
+			if (w->visible)
+				vc++;
+		if (!vc)
+			continue;
+		n[idx++ % ncols]++;
+	}
+
+	float slot[3] = { 0.f, 0.f, 0.f };
+	for (int c = 0; c < ncols; c++)
+		if (n[c] > 0)
+			slot[c] = (wrap_y - top - (n[c] - 1) * gap) / n[c];
+
+	float col_y[3] = { top, top, top };
+	idx = 0;
+	for (auto gb : t->groupboxes)
+	{
+            if (!show(gb))
+                    continue;
+            if (!show(gb))
+                    continue;
+		int vc = 0;
+		for (auto w : gb->widgets)
+			if (w->visible)
+				vc++;
+		if (!vc)
+			continue;
+
+		int col = idx++ % ncols;
+		float need = 34.f;
+		for (auto w : gb->widgets)
+			if (w->visible)
+				need += widget_height(w);
+
+		auto it = measured.find(gb);
+		if (it != measured.end())
+			need = ImMax(need, it->second);
+
+		float height = ImMax(slot[col], need);
+		if (col_y[col] + height > wrap_y)
+			height = ImMax(wrap_y - col_y[col], 60.f);
+		if (height < 60.f)
+			continue;
+
+		ImGui::SetCursorPos(ImVec2(160.f + col * (card_w + gap), col_y[col]));
+		phobia::menu_child(gb->name.c_str(), ImVec2(card_w, height));
+
+		ImVec2 child_pos = ImGui::GetWindowPos();
+		float bottom = child_pos.y;
+		float row = child_pos.y + 32.f;
+		for (auto w : gb->widgets)
+			if (w->visible)
+			{
+				ImGui::SetCursorScreenPos(ImVec2(child_pos.x + 10.f, row));
+				widget(w);
+				const float drawn = ImGui::GetItemRectMax().y;
+				bottom = ImMax(bottom, drawn);
+				row = ImMax(row + widget_height(w), drawn + 4.f);
+			}
+
+		measured[gb] = ImMax(bottom - child_pos.y + 8.f, 60.f);
+		ImGui::EndChild();
+
+		col_y[col] += height + gap;
+	}
+}
+
+void RenderTab()
+{
+	const float ty = menu_h - 48.f;
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	ImVec2 wp = ImGui::GetWindowPos();
+
+	for (int i = 0; i < 8; i++)
+	{
+		ImVec2 a(wp.x + 218.f + i * 78.f, wp.y + ty);
+
+		if (m_tabs == i)
+			dl->AddRectFilled(ImVec2(a.x - 4.f, a.y - 6.f), ImVec2(a.x + 52.f, a.y + 40.f), ImColor(38, 38, 38, int(255 * ImGui::GetStyle().Alpha)), 6.f, ImDrawFlags_RoundCornersAll);
+
+		dl->AddText(phobia_icon_font, 18.f, ImVec2(a.x + 14.f, a.y), ImColor(200, 200, 200, int(255 * ImGui::GetStyle().Alpha)), tab_icons[i]);
+
+		ImVec2 ts = ImGui::CalcTextSize(tab_names[i]);
+		dl->AddText(ImVec2(a.x + (44.f - ts.x) * 0.5f, a.y + 22.f), ImColor(m_tabs == i ? 255 : 170, m_tabs == i ? 255 : 170, m_tabs == i ? 255 : 170, int(255 * ImGui::GetStyle().Alpha)), tab_names[i]);
+
+		ImGui::SetCursorScreenPos(ImVec2(a.x - 4.f, a.y - 6.f));
+		ImGui::InvisibleButton(tab_names[i], ImVec2(56.f, 46.f));
+		if (ImGui::IsItemClicked())
+			m_tabs = i;
+	}
+
+	if (Menu)
+		tab_content(Menu->FindTab(tab_names[m_tabs]));
+}
+
+void sidebar()
+{
+    auto draw = ImGui::GetWindowDrawList();
+    ImVec2 pos = ImGui::GetWindowPos();
+    const float a = ImGui::GetStyle().Alpha;
+
+    static const char* hdr[8] =
+    {
+        "General", "General", "General", "ESP", "Main", "Viewmodel", "General", "General"
+    };
+    static const char* list[8][6] =
+    {
+        { "Rifles", "Pistols", "SMGs", "Shotguns", "Snipers", "LMGs" },
+        { "Angles", "Fake lag", "Other", "", "", "" },
+        { "ESP", "Chams", "Preview", "", "", "" },
+        { "View", "Other", "", "", "" },
+        { "Utility", "Nade Helper", "", "", "" },
+        { "Cosmetics", "", "", "", "" },
+        { "Config", "Backup", "", "", "" },
+        { "Scripts", "", "", "", "" },
+    };
+    static const char* icons[6] = { "j", "f", "g", "h", "i", "k" };
+
+    phobia::add_colored_text(draw, ImVec2(pos.x + 10.f, pos.y + 74.f),
+        ImColor(105, 105, 105, int(255 * a)), ImColor(190, 190, 190, int(255 * a)), hdr[m_tabs]);
+
+    for (int i = 0; i < 6; i++)
+    {
+        const char* nm = list[m_tabs][i];
+        if (!nm[0])
+            break;
+
+        const float y = pos.y + 108.f + i * 44.f;
+
+        if (side_sel[m_tabs] == i)
+        {
+            draw->AddRectFilled(ImVec2(pos.x, y - 12.f), ImVec2(pos.x + 3.f, y + 16.f), ImColor(255, 255, 255, int(255 * a)), 2.f);
+            draw->AddRectFilled(ImVec2(pos.x + 3.f, y - 12.f), ImVec2(pos.x + 146.f, y + 16.f), ImColor(38, 38, 38, int(255 * a)));
+        }
+
+        draw->AddText(phobia_icon_font, 16.f, ImVec2(pos.x + 78.f, y - 6.f), ImColor(200, 200, 200, int(255 * a)), icons[i]);
+        draw->AddText(ImVec2(pos.x + 10.f, y - 6.f),
+            ImColor(side_sel[m_tabs] == i ? 255 : 175, side_sel[m_tabs] == i ? 255 : 175, side_sel[m_tabs] == i ? 255 : 175, int(255 * a)), nm);
+
+        ImGui::SetCursorScreenPos(ImVec2(pos.x, y - 12.f));
+        ImGui::InvisibleButton(nm, ImVec2(146.f, 28.f));
+        if (ImGui::IsItemClicked())
+            side_sel[m_tabs] = i;
+    }
+
+    if (m_tabs == 0 && config.ragebot.selected_weapon)
+        config.ragebot.selected_weapon->value = side_sel[0] + 1;
+}
+
+void user_info()
+{
+	auto draw = ImGui::GetWindowDrawList();
+	ImVec2 pos = ImGui::GetWindowPos();
+	const float top = menu_h - 108.f;
+
+	draw->AddRectFilled(ImVec2(pos.x + 8.f, pos.y + top), ImVec2(pos.x + 138.f, pos.y + top + 36.f), ImColor(41, 41, 41, int(255 * ImGui::GetStyle().Alpha)), 5.f, ImDrawFlags_RoundCornersAll);
+	draw->AddRect(ImVec2(pos.x + 8.f, pos.y + top), ImVec2(pos.x + 138.f, pos.y + top + 36.f), ImColor(50, 50, 50, int(255 * ImGui::GetStyle().Alpha)), 5.f, ImDrawFlags_RoundCornersAll, 1);
+
+	phobia::add_colored_text(draw, ImVec2(pos.x + 46.f, pos.y + top + 2.f), ImColor(105, 105, 105, int(255 * ImGui::GetStyle().Alpha)), ImColor(255, 255, 255, int(255 * ImGui::GetStyle().Alpha)), "(bouy)");
+	phobia::add_colored_text(draw, ImVec2(pos.x + 46.f, pos.y + top + 17.f), ImColor(105, 105, 105, int(255 * ImGui::GetStyle().Alpha)), ImColor(255, 255, 255, int(255 * ImGui::GetStyle().Alpha)), "Till: (25.09.2023)");
+
+	ImGui::SetCursorPos(ImVec2(13.f, top + 4.f));
+	ImGui::Image((ImTextureID)foto_user, ImVec2(24.f, 24.f));
+}
+
+void Decoration()
+{
+	auto draw = ImGui::GetWindowDrawList();
+	ImVec2 pos = ImGui::GetWindowPos();
+	const float bar = menu_h - 64.f;
+
+	draw->AddRectFilled(ImVec2(pos.x, pos.y), ImVec2(pos.x + 146.f, pos.y + menu_h), ImColor(32, 32, 32, int(255 * ImGui::GetStyle().Alpha)), 8.f, ImDrawFlags_RoundCornersTopLeft);
+	draw->AddRect(ImVec2(pos.x, pos.y), ImVec2(pos.x + 146.f, pos.y + menu_h), ImColor(50, 50, 50, int(255 * ImGui::GetStyle().Alpha)), 8.f, ImDrawFlags_RoundCornersTopLeft, 1);
+
+	draw->AddRectFilled(ImVec2(pos.x + 145.f, pos.y), ImVec2(pos.x + menu_w, pos.y + menu_h), ImColor(26, 26, 26, int(255 * ImGui::GetStyle().Alpha)), 8.f, ImDrawFlags_RoundCornersTopRight);
+	draw->AddRect(ImVec2(pos.x + 145.f, pos.y), ImVec2(pos.x + menu_w, pos.y + menu_h), ImColor(50, 50, 50, int(255 * ImGui::GetStyle().Alpha)), 8.f, ImDrawFlags_RoundCornersTopRight, 1);
+
+	draw->AddRectFilled(ImVec2(pos.x + 145.f, pos.y + bar), ImVec2(pos.x + menu_w, pos.y + menu_h), ImColor(30, 30, 30, int(255 * ImGui::GetStyle().Alpha)), 8.f, ImDrawFlags_RoundCornersBottomRight);
+	draw->AddLine(ImVec2(pos.x + 146.f, pos.y + 45.f), ImVec2(pos.x + menu_w - 10.f, pos.y + 45.f), ImColor(44, 44, 44, int(255 * ImGui::GetStyle().Alpha)));
+	draw->AddLine(ImVec2(pos.x + 146.f, pos.y + bar), ImVec2(pos.x + menu_w - 10.f, pos.y + bar), ImColor(44, 44, 44, int(255 * ImGui::GetStyle().Alpha)));
+
+	draw->AddRectFilled(ImVec2(pos.x + 700.f, pos.y + 12.f), ImVec2(pos.x + 852.f, pos.y + 32.f), ImColor(34, 34, 34, int(255 * ImGui::GetStyle().Alpha)), 4.f, ImDrawFlags_RoundCornersAll);
+	draw->AddRect(ImVec2(pos.x + 700.f, pos.y + 12.f), ImVec2(pos.x + 852.f, pos.y + 32.f), ImColor(46, 46, 46, int(255 * ImGui::GetStyle().Alpha)), 4.f, ImDrawFlags_RoundCornersAll, 1);
+	phobia::add_colored_text(draw, ImVec2(pos.x + 712.f, pos.y + 16.f), ImColor(105, 105, 105, int(255 * ImGui::GetStyle().Alpha)), ImColor(140, 140, 140, int(255 * ImGui::GetStyle().Alpha)), "Search...");
+
+	ImGui::SetCursorPos(ImVec2(14.f, 12.f));
+	ImGui::Image((ImTextureID)logo, ImVec2(126.f, 22.f));
+}
+
+void grip()
+{
+	ImVec2 wpos = ImGui::GetWindowPos();
+	ImVec2 wsize = ImGui::GetWindowSize();
+	ImVec2 gp = ImVec2(wpos.x + wsize.x - 16.f, wpos.y + wsize.y - 16.f);
+
+	ImGui::SetCursorScreenPos(gp);
+	ImGui::InvisibleButton("##grip", ImVec2(16.f, 16.f));
+
+	if (ImGui::IsItemActive())
+	{
+		ImGuiIO& io = ImGui::GetIO();
+		menu_w = ImClamp(menu_w + io.MouseDelta.x, 700.f, io.DisplaySize.x);
+		menu_h = ImClamp(menu_h + io.MouseDelta.y, 460.f, io.DisplaySize.y);
+	}
+
+	if (ImGui::IsItemHovered())
+		ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE);
+
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	for (int i = 0; i < 3; i++)
+		for (int j = 0; j < 3 - i; j++)
+			dl->AddRectFilled(ImVec2(gp.x + 14.f - i * 4.f, gp.y + 14.f - j * 4.f), ImVec2(gp.x + 16.f - i * 4.f, gp.y + 16.f - j * 4.f), ImColor(105, 105, 105, int(255 * ImGui::GetStyle().Alpha)));
+}
+
+void Particles()
+{
+if (!particles)
+return;
+
+ImVec2 screen_size = { (float)GetSystemMetrics(SM_CXSCREEN), (float)GetSystemMetrics(SM_CYSCREEN) };
+
+static ImVec2 partile_pos[100];
+static ImVec2 partile_target_pos[100];
+static float partile_speed[100];
+static float partile_radius[100];
+
+for (int i = 1; i < 50; i++)
+{
+if (partile_pos[i].x == 0 || partile_pos[i].y == 0)
+{
+partile_pos[i].x = rand() % (int)screen_size.x + 1;
+partile_pos[i].y = 15.f;
+partile_speed[i] = 1 + rand() % 25;
+partile_radius[i] = rand() % 4;
+
+partile_target_pos[i].x = rand() % (int)screen_size.x;
+partile_target_pos[i].y = screen_size.y * 2;
+}
+
+partile_pos[i] = ImLerp(partile_pos[i], partile_target_pos[i], ImGui::GetIO().DeltaTime * (partile_speed[i] / 60));
+
+if (partile_pos[i].y > screen_size.y)
+{
+partile_pos[i].x = 0;
+partile_pos[i].y = 0;
+}
+
+	dpi_scale = 1.f;
+}
+}
+
+void Render()
+{
+	if (!menu_sized)
+	{
+		menu_w = base_w;
+		menu_h = base_h;
+		menu_sized = true;
+	}
+
+	sx = menu_w / base_w;
+	sy = menu_h / base_h;
+	dpi_scale = sy;
+	ImGui::GetIO().FontGlobalScale = sy;
+
+	ImGui::SetNextWindowSize(ImVec2(menu_w, menu_h));
+	ImGui::PushFont(phobia_font);
+	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, open_alpha);
+	ImGui::Begin("Dear ImGui", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground);
+	{
+		Decoration();
+		RenderTab();
+		sidebar();
+		user_info();
+		grip();
+
+		Particles();
+	}
+	ImGui::End();
+	ImGui::PopStyleVar();
+	ImGui::PopFont();
+}
+}
+void phobia::init(IDirect3DDevice9* device)
+{
+static bool initialized = false;
+if (initialized || !device)
+return;
+initialized = true;
+
+ImGuiIO& io = ImGui::GetIO();
+
+ImFontConfig font_config;
+font_config.PixelSnapH = false;
+font_config.OversampleH = 5;
+font_config.OversampleV = 5;
+font_config.RasterizerMultiply = 1.2f;
+
+static const ImWchar ranges[] =
+{
+0x0020, 0x00FF,
+0x0400, 0x052F,
+0x2DE0, 0x2DFF,
+0xA640, 0xA69F,
+0xE000, 0xE226,
+0,
+};
+
+font_config.GlyphRanges = ranges;
+
+phobia_font = io.Fonts->AddFontFromMemoryTTF(poppin_font, sizeof(poppin_font), 16.f, &font_config, ranges);
+phobia_title_font = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\arialbd.ttf", 19.f, &font_config, ranges);
+phobia_icon_font = io.Fonts->AddFontFromMemoryTTF(icon_font, sizeof(icon_font), 25.f, &font_config, ranges);
+phobia_big_font = io.Fonts->AddFontFromMemoryTTF(poppin_font, sizeof(poppin_font), 25.f, &font_config, ranges);
+
+if (bgs == nullptr)
+D3DXCreateTextureFromFileInMemoryEx(device, bg_one, sizeof(bg_one), 1920, 1080, D3DX_DEFAULT, D3DUSAGE_DYNAMIC, D3DFMT_UNKNOWN, D3DPOOL_DEFAULT, D3DX_DEFAULT, D3DX_DEFAULT, 0, NULL, NULL, &bgs);
+
+if (logo == nullptr)
+D3DXCreateTextureFromFileInMemoryEx(device, logo_one, sizeof(logo_one), 120, 25, D3DX_DEFAULT, D3DUSAGE_DYNAMIC, D3DFMT_UNKNOWN, D3DPOOL_DEFAULT, D3DX_DEFAULT, D3DX_DEFAULT, 0, NULL, NULL, &logo);
+
+if (logotwo == nullptr)
+D3DXCreateTextureFromFileInMemoryEx(device, logo_two, sizeof(logo_two), 85, 98, D3DX_DEFAULT, D3DUSAGE_DYNAMIC, D3DFMT_UNKNOWN, D3DPOOL_DEFAULT, D3DX_DEFAULT, D3DX_DEFAULT, 0, NULL, NULL, &logotwo);
+
+if (foto_user == nullptr)
+D3DXCreateTextureFromFileInMemoryEx(device, user, sizeof(user), 28, 28, D3DX_DEFAULT, D3DUSAGE_DYNAMIC, D3DFMT_UNKNOWN, D3DPOOL_DEFAULT, D3DX_DEFAULT, D3DX_DEFAULT, 0, NULL, NULL, &foto_user);
+}
+
+void phobia::draw(bool open)
+{
+open_alpha = ImClamp(open_alpha + (2.f * ImGui::GetIO().DeltaTime * (open ? 1.5f : -1.5f)), 0.f, 1.f);
+if (open_alpha <= 0.01f)
+return;
+
+int w = GetSystemMetrics(SM_CXSCREEN), h = GetSystemMetrics(SM_CYSCREEN);
+
+if (background)
+{
+ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(-1, -1));
+ImGui::PushStyleVar(ImGuiStyleVar_Alpha, open_alpha);
+ImGui::SetNextWindowSizeConstraints(ImVec2((float)w, (float)h), ImVec2((float)w, (float)h));
+ImGui::SetNextWindowPos(ImVec2(0, 0));
+ImGui::Begin("phobia_bg", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+{
+auto render = ImGui::GetWindowDrawList();
+ImVec2 p = ImGui::GetWindowPos();
+render->AddImage((ImTextureID)bgs, p, ImVec2(p.x + w, p.y + h));
+}
+ImGui::End();
+ImGui::PopStyleVar(2);
+}
+
+render_ui::Render();
+}
